@@ -1,0 +1,71 @@
+remote_host = "example-host"
+
+[collect]
+n_folds = 5
+importance_models = [
+    "xgboost",
+    "random-forest",
+]
+
+[excel]
+metrics = [ "AUROC", "AUPRC", "ACC", "F1", "SEN", "SPC" ]
+output = "outputs/results.xlsx"
+
+[report]
+title = "Experiment Results"
+subtitle = "Progress Report"
+author = "Research Team"
+footer = "Progress Report"
+
+[setting_map]
+logs_imputed = "填补缺失值, 4500 建模 ADNI 验证"
+logs_not_imputed = "不填补缺失值, 4500 建模 ADNI 验证"
+logs_imputed_swapped = "填补缺失值, ADNI 建模 4500 验证"
+logs_not_imputed_swapped = "不填补缺失值, ADNI 建模 4500 验证"
+
+[name_map]
+h-demo_h-mmse_h-moca_h-mri_h-history_sh-apoe-labdata = "原始体积"
+h-demo_h-mmse_h-moca_h-mri-roi_h-history_sh-apoe-labdata = "大脑区"
+
+[modality_map]
+h-demo = "人口学"
+h-history = "病史"
+h-mmse = "MMSE"
+h-moca = "MoCA"
+h-mri = "核磁"
+h-mri-roi = "核磁 ROI"
+h-plasma = "血浆生物标记物"
+sh-apoe-labdata = "APOE 与血化验"
+
+[group_map]
+"A+" = "A+"
+"A-" = "A-"
+"T+" = "T+"
+"T-" = "T-"
+fast = "快进展"
+slow = "慢进展"
+
+[model_map]
+random-forest = "随机森林"
+rrl = "RRL"
+xgboost = "XGBoost"
+
+[ref_map]
+calibrated-fusion = "校准融合"
+
+[[units]]
+remote_root = "/srv/experiments/run-a"
+root = "data/run-a"
+settings = [ "logs_imputed", "logs_not_imputed" ]
+train_name = "h-demo_h-mmse_h-moca_h-mri_h-mri-roi_h-history_sh-apoe-labdata"
+names = [
+    "h-demo_h-mmse_h-moca_h-mri_h-history_sh-apoe-labdata",
+    "h-demo_h-mmse_h-moca_h-mri-roi_h-history_sh-apoe-labdata",
+]
+groups = [ "A-_A+", "T-_T+", "slow_fast" ]
+models = [
+    "xgboost",
+    "random-forest",
+    "rrl",
+]
+refs = [ "calibrated-fusion" ]
