@@ -6,7 +6,7 @@ from typing import Iterable, Sequence
 
 import xlsxwriter  # type: ignore[import]
 
-from config import CONFIG, ProjectConfig, Unit
+from config import CONFIG, Model, ProjectConfig, Unit
 
 METRIC_ALIASES = {
     "AUC": "AUROC",
@@ -19,6 +19,7 @@ METRIC_PATTERN = re.compile(
 
 @dataclass
 class TableRow:
+    comparison: tuple[int, str, str, str, str, str | None]
     setting: str
     stage: str
     group: str
@@ -27,8 +28,8 @@ class TableRow:
     values: dict[str, float]
 
     @property
-    def best_key(self) -> tuple[str, str, str, str]:
-        return (self.setting, self.stage, self.group, self.item)
+    def best_key(self) -> tuple[int, str, str, str, str, str | None]:
+        return self.comparison
 
 
 def normalize_metric(metric: str) -> str:
@@ -66,16 +67,16 @@ def group_label(config: ProjectConfig, group: str) -> str:
 
 
 def model_label(
-    config: ProjectConfig, model: str, ref: str | None, refs: Sequence[str]
+    config: ProjectConfig, model: Model, ref: str | None, refs: Sequence[str]
 ) -> str:
-    label = mapped(config.model_map, model)
+    label = mapped(config.model_map, model.id)
     if ref is not None and len(refs) > 1:
         label += f"（{mapped(config.ref_map, ref)}）"
     return label
 
 
 def training_fusion_log(
-    unit: Unit, setting: str, group: str, model: str, ref: str, name: str
+    unit: Unit, setting: str, group: str, model: Model, ref: str, name: str
 ) -> Path:
     ref_name = ref.replace("-", "_")
     return (
@@ -85,7 +86,7 @@ def training_fusion_log(
         / unit.train_name
         / group
         / "result-replay"
-        / model
+        / model.id
         / ref
         / name
         / f"train_ci_all_{ref_name}_youden.log"
@@ -93,15 +94,17 @@ def training_fusion_log(
 
 
 def final_fusion_log(
-    unit: Unit, setting: str, group: str, model: str, name: str
+    unit: Unit, setting: str, group: str, model: Model, name: str
 ) -> Path:
-    return unit.root / setting / "final" / group / model / "eval" / name / "results.log"
+    return (
+        unit.root / setting / "final" / group / model.id / "eval" / name / "results.log"
+    )
 
 
 def modality_log(
-    unit: Unit, setting: str, group: str, model: str, ref: str, modality: str
+    unit: Unit, setting: str, group: str, model: Model, ref: str, modality: str
 ) -> Path:
-    log_model = "rrl-parser" if model == "rrl" else model
+    log_model = model.parser_id if model.name == "rrl" else model.id
     return (
         unit.root
         / setting
@@ -115,7 +118,10 @@ def modality_log(
 
 
 def collect_fusion_rows(
-    config: ProjectConfig, unit: Unit, metrics: Sequence[str]
+    config: ProjectConfig,
+    unit: Unit,
+    unit_index: int,
+    metrics: Sequence[str],
 ) -> list[TableRow]:
     rows: list[TableRow] = []
     for setting in unit.settings:
@@ -124,10 +130,18 @@ def collect_fusion_rows(
             item_name = mapped(config.name_map, name)
             for group in unit.groups:
                 group_name = group_label(config, group)
-                for model in unit.models:
-                    for ref in unit.refs:
+                for ref in unit.refs:
+                    for model in unit.models:
                         rows.append(
                             TableRow(
+                                comparison=(
+                                    unit_index,
+                                    setting,
+                                    "training",
+                                    group,
+                                    name,
+                                    ref,
+                                ),
                                 setting=setting_name,
                                 stage="交叉验证",
                                 group=group_name,
@@ -144,6 +158,14 @@ def collect_fusion_rows(
                 for model in unit.models:
                     rows.append(
                         TableRow(
+                            comparison=(
+                                unit_index,
+                                setting,
+                                "final",
+                                group,
+                                name,
+                                None,
+                            ),
                             setting=setting_name,
                             stage="外部验证",
                             group=group_name,
@@ -159,7 +181,10 @@ def collect_fusion_rows(
 
 
 def collect_modality_rows(
-    config: ProjectConfig, unit: Unit, metrics: Sequence[str]
+    config: ProjectConfig,
+    unit: Unit,
+    unit_index: int,
+    metrics: Sequence[str],
 ) -> list[TableRow]:
     rows: list[TableRow] = []
     for setting in unit.settings:
@@ -168,10 +193,18 @@ def collect_modality_rows(
             group_name = group_label(config, group)
             for modality in unit.modalities:
                 item_name = mapped(config.modality_map, modality)
-                for model in unit.models:
-                    for ref in unit.refs:
+                for ref in unit.refs:
+                    for model in unit.models:
                         rows.append(
                             TableRow(
+                                comparison=(
+                                    unit_index,
+                                    setting,
+                                    "training",
+                                    group,
+                                    modality,
+                                    ref,
+                                ),
                                 setting=setting_name,
                                 stage="交叉验证",
                                 group=group_name,
@@ -190,8 +223,8 @@ def collect_modality_rows(
 
 def best_values(
     rows: Sequence[TableRow], metrics: Sequence[str]
-) -> dict[tuple[tuple[str, str, str, str], str], float]:
-    result: dict[tuple[tuple[str, str, str, str], str], float] = {}
+) -> dict[tuple[tuple[int, str, str, str, str, str | None], str], float]:
+    result: dict[tuple[tuple[int, str, str, str, str, str | None], str], float] = {}
     for row in rows:
         for metric in metrics:
             key = (row.best_key, metric)
@@ -249,14 +282,12 @@ def write_sheet(
     worksheet.set_column(5, len(headers) - 1, 11, number_format)
 
 
-def build_workbook(
-    config: ProjectConfig, metrics: Sequence[str], output: Path
-) -> None:
+def build_workbook(config: ProjectConfig, metrics: Sequence[str], output: Path) -> None:
     fusion_rows: list[TableRow] = []
     modality_rows: list[TableRow] = []
-    for unit in config.units:
-        fusion_rows.extend(collect_fusion_rows(config, unit, metrics))
-        modality_rows.extend(collect_modality_rows(config, unit, metrics))
+    for unit_index, unit in enumerate(config.units):
+        fusion_rows.extend(collect_fusion_rows(config, unit, unit_index, metrics))
+        modality_rows.extend(collect_modality_rows(config, unit, unit_index, metrics))
 
     output.parent.mkdir(parents=True, exist_ok=True)
     workbook = xlsxwriter.Workbook(str(output))

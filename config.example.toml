@@ -48,14 +48,24 @@ slow = "慢进展"
 [model_map]
 random-forest = "随机森林"
 rrl = "RRL"
+rrl-variant = "RRL, Variant"
 xgboost = "XGBoost"
 
 [ref_map]
 calibrated-fusion = "校准融合"
 
-[[units]]
+[[downloads]]
+id = "run-a"
 remote_root = "/srv/experiments/run-a"
-root = "data/run-a"
+local_root = "data/downloads/run-a"
+
+[[downloads]]
+id = "run-b"
+remote_root = "/srv/experiments/run-b"
+local_root = "data/downloads/run-b"
+
+[[units]]
+root = "data/combined"
 settings = [ "logs_imputed", "logs_not_imputed" ]
 train_name = "h-demo_h-mmse_h-moca_h-mri_h-mri-roi_h-history_sh-apoe-labdata"
 names = [
@@ -64,8 +74,9 @@ names = [
 ]
 groups = [ "A-_A+", "T-_T+", "slow_fast" ]
 models = [
-    "xgboost",
-    "random-forest",
-    "rrl",
+    { download = "run-a", name = "xgboost" },
+    { download = "run-a", name = "random-forest" },
+    { download = "run-a", name = "rrl" },
+    { download = "run-b", name = "rrl", suffix = "-variant" },
 ]
 refs = [ "calibrated-fusion" ]

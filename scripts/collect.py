@@ -52,7 +52,7 @@ def get_rules(rule_file: Path) -> str:
     return "\n".join(lines)
 
 
-def write_results(exp_root: Path, names: tuple[str, ...]) -> None:
+def write_results(exp_root: Path, names: tuple[str, ...], collect_rules: bool) -> None:
     for name in names:
         name_root = exp_root / "eval" / name
         modalities = "_".join(sorted(name.split("_")))
@@ -64,7 +64,7 @@ def write_results(exp_root: Path, names: tuple[str, ...]) -> None:
         )
         (name_root / "weights.tsv").write_text(weights, encoding="utf-8")
 
-        if exp_root.name == "rrl":
+        if collect_rules:
             rules = get_rules(name_root / "rrl_ranked_rules.tsv")
             (name_root / "rules.tsv").write_text(rules, encoding="utf-8")
 
@@ -77,10 +77,12 @@ def collect_unit(config: ProjectConfig, unit: Unit) -> None:
         for group in unit.groups:
             print(f"Processing {setting} / {group}...")
             group_root = training_root / group
-            for model in config.collect.importance_models:
+            for model in unit.models:
+                if model.name not in config.collect.importance_models:
+                    continue
                 for ref in unit.refs:
                     write_scores(
-                        group_root / model / ref,
+                        group_root / model.id / ref,
                         unit.modalities,
                         config.collect.n_folds,
                     )
@@ -90,7 +92,11 @@ def collect_unit(config: ProjectConfig, unit: Unit) -> None:
             print(f"Processing {setting} / {group}...")
             group_root = setting_root / "final" / group
             for model in unit.models:
-                write_results(group_root / model, unit.names)
+                write_results(
+                    group_root / model.id,
+                    unit.names,
+                    collect_rules=model.name == "rrl",
+                )
 
 
 def main() -> None:

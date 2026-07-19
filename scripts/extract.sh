@@ -5,7 +5,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/extract.sh [options]
 
-Download selected log files for every unit in config.toml.
+Download selected log files for every configured download.
 
 Options:
   -n, --dry-run  Show transfer statistics without writing files.
@@ -51,6 +51,9 @@ else
 fi
 
 sync_filters=(
+  --filter='+ /processed/'
+  --filter='+ /processed/process_info.toml'
+  --filter='- /processed/***'
   --filter='- /*/training/**/events/'
   --filter='- /*/training/**/fold_artifacts/'
   --filter='- /*/training/**/roc_*_[0-9].png'
@@ -65,7 +68,6 @@ sync_filters=(
   --filter='+ */'
   --filter='- /*/training/***'
   --filter='+ /*/final/***'
-  --filter='+ /process_info.toml'
   --filter='- *'
 )
 
@@ -82,8 +84,8 @@ remote_rsync_source() {
 
 validate_remote_unit() {
   if ! ssh -n "$remote_host" \
-    "test -d $(remote_quote "$remote_root") && test -f $(remote_quote "$remote_root/process_info.toml")"; then
-    echo "Missing remote root or process_info.toml: $remote_root" >&2
+    "test -d $(remote_quote "$remote_root") && test -f $(remote_quote "$remote_root/processed/process_info.toml")"; then
+    echo "Missing remote root or processed/process_info.toml: $remote_root" >&2
     return 1
   fi
 }
@@ -114,10 +116,10 @@ sync_unit() {
   "${rsync_cmd[@]}" </dev/null
 }
 
-unit_index=0
+download_index=0
 while IFS=$'\t' read -r remote_host remote_root local_root <&3; do
-  ((unit_index += 1))
-  echo "===== Unit $unit_index: $remote_root -> $local_root ====="
+  ((download_index += 1))
+  echo "===== Download $download_index: $remote_root -> $local_root ====="
   sync_unit
-  echo "===== Unit $unit_index complete ====="
+  echo "===== Download $download_index complete ====="
 done 3<<< "$config_rows"
