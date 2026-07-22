@@ -3,6 +3,7 @@
 #let read-tsv(path) = read(path).split("\n").map(it => it.split("\t"))
 #let unit-root(unit) = "/" + unit.root
 #let model-id(model) = model.name + model.at("suffix", default: "")
+#let validation-name(validation) = config.validation_map.at(validation)
 
 #let show-result(exp-root, log-file, roc-file) = {
   figure(
@@ -34,7 +35,7 @@
   }
   let data = modalities.zip(..model-weights)
   (model-bests, slide[
-    === 各模态权重
+    === 各模态权重（#validation-name("external")）
     // #set text(0.9em)
     #set par(justify: false)
     #figure(
@@ -47,20 +48,26 @@
   ])
 }
 
-#let show-importance(unit, setting, name, group, model-bests) = {
+#let show-importance(unit, setting, group, model-bests: none) = {
+  // Future migration: use model-bests to select each model's best modality,
+  // add the final-fitting path inputs, and read importance from final/.
   let training-root = (unit-root(unit), setting, "training", unit.train_name, group).join("/")
   let models = unit.models.filter(model => config.collect.importance_models.contains(model.name))
   let model-names = models.map(model => config.model_map.at(model-id(model)))
   for ref in unit.refs {
     let model-scores = models.map(model => {
       let id = model-id(model)
-      let modality = model-bests.at(id)
+      let weights-path = (training-root, id, ref, "weights.tsv").join("/")
+      let weights = read-tsv(weights-path)
+      let weight-values = weights.map(it => float(it.at(1)))
+      let max-index = weight-values.position(x => x == calc.max(..weight-values))
+      let modality = weights.at(max-index).at(0)
       let score-file = "scores_" + modality + ".tsv"
       let score-path = (training-root, id, ref, score-file).join("/")
       read-tsv(score-path)
     })
     slide[
-      === 重要变量（从左至右分别为 #model-names.join(", ")）
+      === 重要变量（#validation-name("internal")；从左至右分别为 #model-names.join(", ")）
       #set text(0.7em)
       #set par(justify: false)
       #figure(
@@ -87,7 +94,7 @@
     let rule-path = (final-root, id, "eval", name, "rules.tsv").join("/")
     let rule-data = read-tsv(rule-path)
     slide[
-      === 重要规则（#config.model_map.at(id)）
+      === 重要规则（#config.model_map.at(id)，#validation-name("external")）
       #set text(0.57em)
       #set par(justify: false)
       #show regex("\band\b"): text.with(weight: "bold", orange)
@@ -117,7 +124,7 @@
   for ref in unit.refs {
     for model in unit.models {
       let id = model-id(model)
-      let model-name = [#config.model_map.at(id)（#config.ref_map.at(ref)）]
+      let model-name = [#config.model_map.at(id)（#validation-name("internal")，#config.ref_map.at(ref)）]
       let exp-root = (training-root, "result-replay", id, ref, name).join("/")
       let ref-name = "all_" + ref.replace("-", "_")
       let log-file = "train_ci_" + ref-name + "_youden.log"
@@ -134,7 +141,7 @@
   let final-root = (unit-root(unit), setting, "final", group).join("/")
   for model in unit.models {
     let id = model-id(model)
-    let model-name = [#config.model_map.at(id)（外部验证）]
+    let model-name = [#config.model_map.at(id)（#validation-name("external")）]
     let exp-root = (final-root, id, "eval", name).join("/")
     let log-file = "results.log"
     let roc-file = "roc_" + name + ".png"
@@ -156,12 +163,17 @@
       for group in unit.groups {
         let group-name = group.split("_").map(it => config.group_map.at(it)).join(" : ")
         [== #group-name]
-        training-results(unit, setting, name, group)
-        final-results(unit, setting, name, group)
-        let (model-bests, weights) = show-weights(unit, setting, name, group)
-        weights
-        show-importance(unit, setting, name, group, model-bests)
-        show-rules(unit, setting, name, group)
+        if unit.validations.contains("internal") {
+          training-results(unit, setting, name, group)
+          show-importance(unit, setting, group)
+        }
+        if unit.validations.contains("external") {
+          final-results(unit, setting, name, group)
+          // Keep model-bests ready for final-fitting feature importance.
+          let (model-bests, weights) = show-weights(unit, setting, name, group)
+          weights
+          show-rules(unit, setting, name, group)
+        }
       }
     }
   }

@@ -24,35 +24,43 @@ def model_links(config: ProjectConfig, unit: Unit, model: Model) -> list[Link]:
         source_setting = download_root / setting
         destination_setting = unit.root / setting
         for group in unit.groups:
-            source_training = source_setting / "training" / unit.train_name / group
-            destination_training = (
-                destination_setting / "training" / unit.train_name / group
-            )
-            links.extend(
-                (
-                    Link(
-                        source=source_setting / "final" / group / model.name,
-                        destination=(destination_setting / "final" / group / model.id),
-                    ),
-                    Link(
-                        source=source_training / model.name,
-                        destination=destination_training / model.id,
-                    ),
-                    Link(
-                        source=source_training / "result-replay" / model.name,
-                        destination=(destination_training / "result-replay" / model.id),
-                    ),
-                )
-            )
-
-            parser_source = source_training / f"{model.name}-parser"
-            if parser_source.exists() or model.name == "rrl":
+            if "external" in unit.validations:
                 links.append(
                     Link(
-                        source=parser_source,
-                        destination=destination_training / model.parser_id,
+                        source=source_setting / "final" / group / model.name,
+                        destination=destination_setting / "final" / group / model.id,
                     )
                 )
+
+            if "internal" in unit.validations:
+                source_training = (
+                    source_setting / "training" / unit.train_name / group
+                )
+                destination_training = (
+                    destination_setting / "training" / unit.train_name / group
+                )
+                links.extend(
+                    (
+                        Link(
+                            source=source_training / model.name,
+                            destination=destination_training / model.id,
+                        ),
+                        Link(
+                            source=source_training / "result-replay" / model.name,
+                            destination=(
+                                destination_training / "result-replay" / model.id
+                            ),
+                        ),
+                    )
+                )
+                parser_source = source_training / f"{model.name}-parser"
+                if parser_source.exists() or model.name == "rrl":
+                    links.append(
+                        Link(
+                            source=parser_source,
+                            destination=destination_training / model.parser_id,
+                        )
+                    )
     return links
 
 

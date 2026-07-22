@@ -17,6 +17,10 @@ subtitle = "Progress Report"
 author = "Research Team"
 footer = "Progress Report"
 
+[validation_map]
+internal = "交叉验证"
+external = "外部验证"
+
 [setting_map]
 logs_imputed = "填补缺失值, 4500 建模 ADNI 验证"
 logs_not_imputed = "不填补缺失值, 4500 建模 ADNI 验证"
@@ -66,6 +70,7 @@ local_root = "data/downloads/run-b"
 
 [[units]]
 root = "data/combined"
+validations = [ "internal", "external" ]
 settings = [ "logs_imputed", "logs_not_imputed" ]
 train_name = "h-demo_h-mmse_h-moca_h-mri_h-mri-roi_h-history_sh-apoe-labdata"
 names = [

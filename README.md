@@ -46,7 +46,7 @@ This builds every unit root from relative symbolic links to its configured downl
 python -m scripts.collect
 ```
 
-This aggregates feature importance across folds, extracts final evaluation text, and writes modality weights and ranked rules for every configured unit.
+For each unit, this processes the configured validation stages. Internal validation aggregates feature importance and training fusion weights; external validation extracts final evaluation text, modality weights, and ranked rules.
 
 ### 4. Build the report
 

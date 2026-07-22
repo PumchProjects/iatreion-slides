@@ -130,53 +130,57 @@ def collect_fusion_rows(
             item_name = mapped(config.name_map, name)
             for group in unit.groups:
                 group_name = group_label(config, group)
-                for ref in unit.refs:
+                if "internal" in unit.validations:
+                    for ref in unit.refs:
+                        for model in unit.models:
+                            rows.append(
+                                TableRow(
+                                    comparison=(
+                                        unit_index,
+                                        setting,
+                                        "internal",
+                                        group,
+                                        name,
+                                        ref,
+                                    ),
+                                    setting=setting_name,
+                                    stage=config.validation_map["internal"],
+                                    group=group_name,
+                                    item=item_name,
+                                    model=model_label(config, model, ref, unit.refs),
+                                    values=read_metrics(
+                                        training_fusion_log(
+                                            unit, setting, group, model, ref, name
+                                        ),
+                                        metrics,
+                                    ),
+                                ),
+                            )
+                if "external" in unit.validations:
                     for model in unit.models:
                         rows.append(
                             TableRow(
                                 comparison=(
                                     unit_index,
                                     setting,
-                                    "training",
+                                    "external",
                                     group,
                                     name,
-                                    ref,
+                                    None,
                                 ),
                                 setting=setting_name,
-                                stage="交叉验证",
+                                stage=config.validation_map["external"],
                                 group=group_name,
                                 item=item_name,
-                                model=model_label(config, model, ref, unit.refs),
+                                model=model_label(config, model, None, unit.refs),
                                 values=read_metrics(
-                                    training_fusion_log(
-                                        unit, setting, group, model, ref, name
+                                    final_fusion_log(
+                                        unit, setting, group, model, name
                                     ),
                                     metrics,
                                 ),
                             )
                         )
-                for model in unit.models:
-                    rows.append(
-                        TableRow(
-                            comparison=(
-                                unit_index,
-                                setting,
-                                "final",
-                                group,
-                                name,
-                                None,
-                            ),
-                            setting=setting_name,
-                            stage="外部验证",
-                            group=group_name,
-                            item=item_name,
-                            model=model_label(config, model, None, unit.refs),
-                            values=read_metrics(
-                                final_fusion_log(unit, setting, group, model, name),
-                                metrics,
-                            ),
-                        )
-                    )
     return rows
 
 
@@ -187,6 +191,8 @@ def collect_modality_rows(
     metrics: Sequence[str],
 ) -> list[TableRow]:
     rows: list[TableRow] = []
+    if "internal" not in unit.validations:
+        return rows
     for setting in unit.settings:
         setting_name = mapped(config.setting_map, setting)
         for group in unit.groups:
@@ -200,13 +206,13 @@ def collect_modality_rows(
                                 comparison=(
                                     unit_index,
                                     setting,
-                                    "training",
+                                    "internal",
                                     group,
                                     modality,
                                     ref,
                                 ),
                                 setting=setting_name,
-                                stage="交叉验证",
+                                stage=config.validation_map["internal"],
                                 group=group_name,
                                 item=item_name,
                                 model=model_label(config, model, ref, unit.refs),
@@ -293,7 +299,8 @@ def build_workbook(config: ProjectConfig, metrics: Sequence[str], output: Path) 
     workbook = xlsxwriter.Workbook(str(output))
     try:
         write_sheet(workbook, "校准融合", fusion_rows, metrics)
-        write_sheet(workbook, "各模态", modality_rows, metrics)
+        if modality_rows:
+            write_sheet(workbook, "各模态", modality_rows, metrics)
     finally:
         workbook.close()
 

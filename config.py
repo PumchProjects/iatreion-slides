@@ -7,6 +7,7 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 CONFIG_FILE = PROJECT_ROOT / "config.toml"
+VALIDATIONS = ("internal", "external")
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,7 @@ class Model:
 @dataclass(frozen=True)
 class Unit:
     root: Path
+    validations: tuple[str, ...]
     settings: tuple[str, ...]
     train_name: str
     names: tuple[str, ...]
@@ -72,6 +74,7 @@ class ProjectConfig:
     collect: CollectConfig
     excel: ExcelConfig
     report: ReportConfig
+    validation_map: dict[str, str]
     setting_map: dict[str, str]
     name_map: dict[str, str]
     modality_map: dict[str, str]
@@ -190,6 +193,18 @@ def load_config(path: str | Path = CONFIG_FILE) -> ProjectConfig:
         footer=_string(report_data, "footer", "report"),
     )
 
+    validation_map = _mapping(data, "validation_map")
+    missing_validation_labels = [
+        validation
+        for validation in VALIDATIONS
+        if not validation_map.get(validation, "").strip()
+    ]
+    if missing_validation_labels:
+        raise ValueError(
+            "validation_map is missing non-empty labels for: "
+            + ", ".join(missing_validation_labels)
+        )
+
     downloads_data = data.get("downloads")
     if not isinstance(downloads_data, list) or not downloads_data:
         raise ValueError("downloads must contain at least one download")
@@ -240,6 +255,15 @@ def load_config(path: str | Path = CONFIG_FILE) -> ProjectConfig:
                 raise ValueError(
                     f"{prefix}.root overlaps download local_root: {download_root}"
                 )
+        validations = _strings(unit_data, "validations", prefix)
+        if len(set(validations)) != len(validations):
+            raise ValueError(f"{prefix}.validations must not contain duplicates")
+        unknown_validations = sorted(set(validations) - set(VALIDATIONS))
+        if unknown_validations:
+            raise ValueError(
+                f"{prefix}.validations contains unknown stages: "
+                + ", ".join(unknown_validations)
+            )
         models_data = unit_data.get("models")
         if not isinstance(models_data, list) or not models_data:
             raise ValueError(f"{prefix}.models must be a non-empty array of tables")
@@ -268,6 +292,7 @@ def load_config(path: str | Path = CONFIG_FILE) -> ProjectConfig:
         units.append(
             Unit(
                 root=root,
+                validations=validations,
                 settings=_strings(unit_data, "settings", prefix),
                 train_name=_string(unit_data, "train_name", prefix),
                 names=_strings(unit_data, "names", prefix),
@@ -291,6 +316,7 @@ def load_config(path: str | Path = CONFIG_FILE) -> ProjectConfig:
         collect=collect,
         excel=excel,
         report=report,
+        validation_map=validation_map,
         setting_map=_mapping(data, "setting_map"),
         name_map=_mapping(data, "name_map"),
         modality_map=_mapping(data, "modality_map"),

@@ -26,6 +26,9 @@ def write_scores(exp_root: Path, modalities: tuple[str, ...], n_folds: int) -> N
         scores = get_scores(exp_root, modality, n_folds)
         (exp_root / f"scores_{modality}.tsv").write_text(scores, encoding="utf-8")
 
+    weights = get_weights(exp_root / "available_fusion.toml")
+    (exp_root / "weights.tsv").write_text(weights, encoding="utf-8")
+
 
 def get_results(log_file: Path) -> str:
     data = log_file.read_text(encoding="utf-8")
@@ -72,31 +75,33 @@ def write_results(exp_root: Path, names: tuple[str, ...], collect_rules: bool) -
 def collect_unit(config: ProjectConfig, unit: Unit) -> None:
     for setting in unit.settings:
         setting_root = unit.root / setting
-        training_root = setting_root / "training" / unit.train_name
-        print(f"{' Training ':=^80}")
-        for group in unit.groups:
-            print(f"Processing {setting} / {group}...")
-            group_root = training_root / group
-            for model in unit.models:
-                if model.name not in config.collect.importance_models:
-                    continue
-                for ref in unit.refs:
-                    write_scores(
-                        group_root / model.id / ref,
-                        unit.modalities,
-                        config.collect.n_folds,
-                    )
+        if "internal" in unit.validations:
+            training_root = setting_root / "training" / unit.train_name
+            print(f"{' Internal ':=^80}")
+            for group in unit.groups:
+                print(f"Processing {setting} / {group}...")
+                group_root = training_root / group
+                for model in unit.models:
+                    if model.name not in config.collect.importance_models:
+                        continue
+                    for ref in unit.refs:
+                        write_scores(
+                            group_root / model.id / ref,
+                            unit.modalities,
+                            config.collect.n_folds,
+                        )
 
-        print(f"{' Final ':=^80}")
-        for group in unit.groups:
-            print(f"Processing {setting} / {group}...")
-            group_root = setting_root / "final" / group
-            for model in unit.models:
-                write_results(
-                    group_root / model.id,
-                    unit.names,
-                    collect_rules=model.name == "rrl",
-                )
+        if "external" in unit.validations:
+            print(f"{' External ':=^80}")
+            for group in unit.groups:
+                print(f"Processing {setting} / {group}...")
+                group_root = setting_root / "final" / group
+                for model in unit.models:
+                    write_results(
+                        group_root / model.id,
+                        unit.names,
+                        collect_rules=model.name == "rrl",
+                    )
 
 
 def main() -> None:
