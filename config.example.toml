@@ -18,18 +18,23 @@ author = "Research Team"
 footer = "Progress Report"
 
 [validation_map]
-internal = "交叉验证"
+internal = "内部验证"
 external = "外部验证"
 
+[cohort_map]
+training = "训练队列"
+cohort-a = "队列 A"
+cohort-b = "队列 B"
+
 [setting_map]
-logs_imputed = "填补缺失值, 4500 建模 ADNI 验证"
-logs_not_imputed = "不填补缺失值, 4500 建模 ADNI 验证"
-logs_imputed_swapped = "填补缺失值, ADNI 建模 4500 验证"
-logs_not_imputed_swapped = "不填补缺失值, ADNI 建模 4500 验证"
+logs_imputed = "填补缺失值"
+logs_not_imputed = "不填补缺失值"
 
 [name_map]
 h-demo_h-mmse_h-moca_h-mri_h-history_sh-apoe-labdata = "原始体积"
 h-demo_h-mmse_h-moca_h-mri-roi_h-history_sh-apoe-labdata = "大脑区"
+h-nonimaging_h-mri = "非影像 + 原始体积"
+h-nonimaging_h-mri-roi = "非影像 + 大脑区"
 
 [modality_map]
 h-demo = "人口学"
@@ -38,6 +43,7 @@ h-mmse = "MMSE"
 h-moca = "MoCA"
 h-mri = "核磁"
 h-mri-roi = "核磁 ROI"
+h-nonimaging = "非影像"
 h-plasma = "血浆生物标记物"
 sh-apoe-labdata = "APOE 与血化验"
 
@@ -71,13 +77,15 @@ local_root = "data/downloads/run-b"
 [[units]]
 root = "data/combined"
 validations = [ "internal", "external" ]
+internal_cohort = "training"
+external_cohorts = [ "cohort-a", "cohort-b" ]
 settings = [ "logs_imputed", "logs_not_imputed" ]
-train_name = "h-demo_h-mmse_h-moca_h-mri_h-mri-roi_h-history_sh-apoe-labdata"
+train_name = "h-nonimaging_h-mri_h-mri-roi"
 names = [
-    "h-demo_h-mmse_h-moca_h-mri_h-history_sh-apoe-labdata",
-    "h-demo_h-mmse_h-moca_h-mri-roi_h-history_sh-apoe-labdata",
+    "h-nonimaging_h-mri",
+    "h-nonimaging_h-mri-roi",
 ]
-groups = [ "A-_A+", "T-_T+", "slow_fast" ]
+groups = [ "slow_fast" ]
 models = [
     { download = "run-a", name = "xgboost" },
     { download = "run-a", name = "random-forest" },

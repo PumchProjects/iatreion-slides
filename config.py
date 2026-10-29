@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
 PROJECT_ROOT = Path(__file__).resolve().parent
 CONFIG_FILE = PROJECT_ROOT / "config.toml"
 VALIDATIONS = ("internal", "external")
@@ -56,6 +55,8 @@ class Model:
 class Unit:
     root: Path
     validations: tuple[str, ...]
+    internal_cohort: str
+    external_cohorts: tuple[str, ...]
     settings: tuple[str, ...]
     train_name: str
     names: tuple[str, ...]
@@ -75,6 +76,7 @@ class ProjectConfig:
     excel: ExcelConfig
     report: ReportConfig
     validation_map: dict[str, str]
+    cohort_map: dict[str, str]
     setting_map: dict[str, str]
     name_map: dict[str, str]
     modality_map: dict[str, str]
@@ -92,7 +94,7 @@ class ProjectConfig:
 def _table(data: dict[str, Any], key: str) -> dict[str, Any]:
     value = data.get(key)
     if not isinstance(value, dict):
-        raise ValueError(f"{key} must be a TOML table")
+        raise TypeError(f"{key} must be a TOML table")
     return value
 
 
@@ -132,7 +134,7 @@ def _optional_string(
     value = data.get(key, default)
     label = f"{prefix}.{key}" if prefix else key
     if not isinstance(value, str):
-        raise ValueError(f"{label} must be a string")
+        raise TypeError(f"{label} must be a string")
     return value
 
 
@@ -178,7 +180,7 @@ def load_config(path: str | Path = CONFIG_FILE) -> ProjectConfig:
 
     excel_data = _table(data, "excel")
     metrics = _strings(excel_data, "metrics", "excel")
-    if len(set(metric.upper() for metric in metrics)) != len(metrics):
+    if len({metric.upper() for metric in metrics}) != len(metrics):
         raise ValueError("excel.metrics must not contain duplicates")
     output = _path(_string(excel_data, "output", "excel"), config_file.parent)
     if output.suffix.lower() != ".xlsx":
@@ -204,6 +206,7 @@ def load_config(path: str | Path = CONFIG_FILE) -> ProjectConfig:
             "validation_map is missing non-empty labels for: "
             + ", ".join(missing_validation_labels)
         )
+    cohort_map = _mapping(data, "cohort_map")
 
     downloads_data = data.get("downloads")
     if not isinstance(downloads_data, list) or not downloads_data:
@@ -215,7 +218,7 @@ def load_config(path: str | Path = CONFIG_FILE) -> ProjectConfig:
     for index, download_data in enumerate(downloads_data):
         prefix = f"downloads[{index}]"
         if not isinstance(download_data, dict):
-            raise ValueError(f"{prefix} must be a TOML table")
+            raise TypeError(f"{prefix} must be a TOML table")
         download_id = _path_component(
             _string(download_data, "id", prefix), f"{prefix}.id"
         )
@@ -245,7 +248,7 @@ def load_config(path: str | Path = CONFIG_FILE) -> ProjectConfig:
     for index, unit_data in enumerate(units_data):
         prefix = f"units[{index}]"
         if not isinstance(unit_data, dict):
-            raise ValueError(f"{prefix} must be a TOML table")
+            raise TypeError(f"{prefix} must be a TOML table")
         root = _relative_path(unit_data, "root", prefix, config_file.parent)
         for other_root in roots:
             if _paths_overlap(root, other_root):
@@ -264,6 +267,16 @@ def load_config(path: str | Path = CONFIG_FILE) -> ProjectConfig:
                 f"{prefix}.validations contains unknown stages: "
                 + ", ".join(unknown_validations)
             )
+        internal_cohort = _path_component(
+            _string(unit_data, "internal_cohort", prefix),
+            f"{prefix}.internal_cohort",
+        )
+        external_cohorts = tuple(
+            _path_component(cohort, f"{prefix}.external_cohorts")
+            for cohort in _strings(unit_data, "external_cohorts", prefix)
+        )
+        if len(set(external_cohorts)) != len(external_cohorts):
+            raise ValueError(f"{prefix}.external_cohorts must not contain duplicates")
         models_data = unit_data.get("models")
         if not isinstance(models_data, list) or not models_data:
             raise ValueError(f"{prefix}.models must be a non-empty array of tables")
@@ -272,7 +285,7 @@ def load_config(path: str | Path = CONFIG_FILE) -> ProjectConfig:
         for model_index, model_data in enumerate(models_data):
             model_prefix = f"{prefix}.models[{model_index}]"
             if not isinstance(model_data, dict):
-                raise ValueError(f"{model_prefix} must be a TOML table")
+                raise TypeError(f"{model_prefix} must be a TOML table")
             name = _path_component(
                 _string(model_data, "name", model_prefix), f"{model_prefix}.name"
             )
@@ -293,6 +306,8 @@ def load_config(path: str | Path = CONFIG_FILE) -> ProjectConfig:
             Unit(
                 root=root,
                 validations=validations,
+                internal_cohort=internal_cohort,
+                external_cohorts=external_cohorts,
                 settings=_strings(unit_data, "settings", prefix),
                 train_name=_string(unit_data, "train_name", prefix),
                 names=_strings(unit_data, "names", prefix),
@@ -300,6 +315,19 @@ def load_config(path: str | Path = CONFIG_FILE) -> ProjectConfig:
                 models=tuple(models),
                 refs=_strings(unit_data, "refs", prefix),
             )
+        )
+
+    missing_cohort_labels = sorted(
+        {
+            cohort
+            for unit in units
+            for cohort in (unit.internal_cohort, *unit.external_cohorts)
+            if cohort not in cohort_map
+        }
+    )
+    if missing_cohort_labels:
+        raise ValueError(
+            "cohort_map is missing labels for: " + ", ".join(missing_cohort_labels)
         )
 
     model_map = _mapping(data, "model_map")
@@ -317,6 +345,7 @@ def load_config(path: str | Path = CONFIG_FILE) -> ProjectConfig:
         excel=excel,
         report=report,
         validation_map=validation_map,
+        cohort_map=cohort_map,
         setting_map=_mapping(data, "setting_map"),
         name_map=_mapping(data, "name_map"),
         modality_map=_mapping(data, "modality_map"),

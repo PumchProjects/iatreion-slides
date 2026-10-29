@@ -35,7 +35,7 @@ done
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd -- "$script_dir/.." && pwd)"
-python_bin="${PYTHON:-python3}"
+python_bin="${PYTHON:-python}"
 
 config_rows="$($python_bin "$project_root/config.py" extract-roots)"
 if [[ -z "$config_rows" ]]; then

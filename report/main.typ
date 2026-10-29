@@ -1,3 +1,5 @@
+// Deprecated: retained for reference and not validated by the cohort-aware pipeline.
+
 #import "globals.typ": *
 
 #show: dewdrop-theme.with(

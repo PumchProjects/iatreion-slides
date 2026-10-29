@@ -10,7 +10,7 @@ from unittest.mock import patch
 from xml.etree import ElementTree
 
 from config import CONFIG, Unit, load_config
-from scripts.collect import collect_unit, write_scores
+from scripts.collect import collect_unit, write_results, write_scores
 from scripts.merge import MARKER, merge_unit
 from scripts.to_excel import (
     TableRow,
@@ -20,9 +20,16 @@ from scripts.to_excel import (
     collect_modality_rows,
 )
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_CONFIG = (PROJECT_ROOT / "config.example.toml").read_text(encoding="utf-8")
+TEST_CONFIG = replace(
+    CONFIG,
+    cohort_map={
+        "training": "训练队列",
+        "cohort-a": "队列 A",
+        "cohort-b": "队列 B",
+    },
+)
 
 
 class ConfigTests(unittest.TestCase):
@@ -40,7 +47,36 @@ class ConfigTests(unittest.TestCase):
     def test_validation_stages_and_labels_are_loaded(self) -> None:
         config = self.load_text(EXAMPLE_CONFIG)
         self.assertEqual(config.units[0].validations, ("internal", "external"))
-        self.assertEqual(config.validation_map["internal"], "交叉验证")
+        self.assertEqual(config.validation_map["internal"], "内部验证")
+
+    def test_cohorts_and_labels_are_loaded(self) -> None:
+        config = self.load_text(EXAMPLE_CONFIG)
+        self.assertEqual(config.units[0].internal_cohort, "training")
+        self.assertEqual(
+            config.units[0].external_cohorts, ("cohort-a", "cohort-b")
+        )
+        self.assertEqual(config.cohort_map["cohort-a"], "队列 A")
+
+    def test_missing_internal_cohort_is_rejected(self) -> None:
+        self.assert_config_error(
+            'internal_cohort = "training"\n',
+            "",
+            "internal_cohort must be a non-empty string",
+        )
+
+    def test_duplicate_external_cohort_is_rejected(self) -> None:
+        self.assert_config_error(
+            'external_cohorts = [ "cohort-a", "cohort-b" ]',
+            'external_cohorts = [ "cohort-a", "cohort-a" ]',
+            "external_cohorts must not contain duplicates",
+        )
+
+    def test_missing_cohort_label_is_rejected(self) -> None:
+        self.assert_config_error(
+            'cohort-b = "队列 B"\n',
+            "",
+            "cohort_map is missing labels for: cohort-b",
+        )
 
     def test_empty_validations_are_rejected(self) -> None:
         self.assert_config_error(
@@ -250,6 +286,46 @@ class CollectTests(unittest.TestCase):
                 "modality\t1.0000",
             )
 
+    def test_external_results_are_written_per_cohort(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            name_root = root / "eval" / "modality"
+            for cohort, value in (("cohort-a", 91), ("cohort-b", 82)):
+                cohort_root = name_root / cohort
+                cohort_root.mkdir(parents=True)
+                (cohort_root / "eval.log").write_text(
+                    "Confusion matrix:\n"
+                    + " " * 33
+                    + "[[1 0]\n"
+                    + " " * 33
+                    + " [0 1]]\n"
+                    + " " * 33
+                    + f"AUROC {value}%\n",
+                    encoding="utf-8",
+                )
+            fusion_root = root / "fusion" / "modality"
+            fusion_root.mkdir(parents=True)
+            (fusion_root / "available_fusion.toml").write_text(
+                "[weights]\nmodality = 1.0\n", encoding="utf-8"
+            )
+
+            write_results(
+                root, ("modality",), ("cohort-a", "cohort-b"), collect_rules=False
+            )
+
+            self.assertIn(
+                "AUROC 91%",
+                (name_root / "cohort-a" / "results.log").read_text(
+                    encoding="utf-8"
+                ),
+            )
+            self.assertIn(
+                "AUROC 82%",
+                (name_root / "cohort-b" / "results.log").read_text(
+                    encoding="utf-8"
+                ),
+            )
+
     def test_external_only_skips_internal_collection(self) -> None:
         unit = replace(
             CONFIG.units[0],
@@ -287,19 +363,32 @@ class CollectTests(unittest.TestCase):
 
 
 class ExcelTests(unittest.TestCase):
-    def test_best_values_are_isolated_by_unit_and_ref(self) -> None:
-        def row(unit: int, ref: str, value: float) -> TableRow:
+    def test_best_values_are_isolated_by_unit_cohort_and_ref(self) -> None:
+        def row(unit: int, cohort: str, ref: str, value: float) -> TableRow:
             return TableRow(
-                comparison=(unit, "setting", "training", "group", "item", ref),
+                comparison=(
+                    unit,
+                    "setting",
+                    "external",
+                    cohort,
+                    "group",
+                    "item",
+                    ref,
+                ),
                 setting="same display label",
-                stage="交叉验证",
+                stage=f"外部验证（{cohort}）",
                 group="group",
                 item="item",
                 model="model",
                 values={"AUROC": value},
             )
 
-        rows = [row(0, "a", 90), row(0, "a", 80), row(1, "a", 70), row(0, "b", 60)]
+        rows = [
+            row(0, "a", "ref", 90),
+            row(0, "a", "ref", 80),
+            row(0, "b", "ref", 70),
+            row(1, "a", "ref", 60),
+        ]
         bests = best_values(rows, ["AUROC"])
 
         self.assertEqual(bests[(rows[0].best_key, "AUROC")], 90)
@@ -311,6 +400,8 @@ class ExcelTests(unittest.TestCase):
             unit = Unit(
                 root=Path(temp_dir),
                 validations=("internal", "external"),
+                internal_cohort="training",
+                external_cohorts=("cohort-a", "cohort-b"),
                 settings=("setting",),
                 train_name="modality",
                 names=("name",),
@@ -332,32 +423,44 @@ class ExcelTests(unittest.TestCase):
                     / "name"
                     / "train_ci_all_ref_youden.log"
                 )
-                final_log = (
-                    unit.root
-                    / "setting"
-                    / "final"
-                    / "group"
-                    / model.id
-                    / "eval"
-                    / "name"
-                    / "results.log"
-                )
-                for log in (training_log, final_log):
-                    log.parent.mkdir(parents=True, exist_ok=True)
-                    log.write_text(f"AUROC {value}%\n", encoding="utf-8")
+                training_log.parent.mkdir(parents=True, exist_ok=True)
+                training_log.write_text(f"AUROC {value}%\n", encoding="utf-8")
+                for cohort in unit.external_cohorts:
+                    final_log = (
+                        unit.root
+                        / "setting"
+                        / "final"
+                        / "group"
+                        / model.id
+                        / "eval"
+                        / "name"
+                        / cohort
+                        / "results.log"
+                    )
+                    final_log.parent.mkdir(parents=True, exist_ok=True)
+                    final_log.write_text(f"AUROC {value}%\n", encoding="utf-8")
 
-            rows = collect_fusion_rows(CONFIG, unit, 0, ["AUROC"])
-            expected = [CONFIG.model_map[model.id] for model in unit.models]
+            rows = collect_fusion_rows(TEST_CONFIG, unit, 0, ["AUROC"])
+            expected = [TEST_CONFIG.model_map[model.id] for model in unit.models]
             count = len(unit.models)
             self.assertEqual([row.model for row in rows[:count]], expected)
             self.assertEqual(
                 [row.stage for row in rows[:count]],
-                [CONFIG.validation_map["internal"]] * count,
+                ["内部验证（训练队列）"] * count,
             )
-            self.assertEqual([row.model for row in rows[count:]], expected)
             self.assertEqual(
-                [row.stage for row in rows[count:]],
-                [CONFIG.validation_map["external"]] * count,
+                [row.model for row in rows[count : count * 2]], expected
+            )
+            self.assertEqual(
+                [row.stage for row in rows[count : count * 2]],
+                ["外部验证（队列 A）"] * count,
+            )
+            self.assertEqual(
+                [row.model for row in rows[count * 2 :]], expected
+            )
+            self.assertEqual(
+                [row.stage for row in rows[count * 2 :]],
+                ["外部验证（队列 B）"] * count,
             )
 
     def test_external_only_rows_do_not_read_training(self) -> None:
@@ -365,6 +468,8 @@ class ExcelTests(unittest.TestCase):
             unit = Unit(
                 root=Path(temp_dir),
                 validations=("external",),
+                internal_cohort="training",
+                external_cohorts=("cohort-a",),
                 settings=("setting",),
                 train_name="modality",
                 names=("name",),
@@ -380,16 +485,19 @@ class ExcelTests(unittest.TestCase):
                 / unit.models[0].id
                 / "eval"
                 / "name"
+                / "cohort-a"
                 / "results.log"
             )
             final_log.parent.mkdir(parents=True)
             final_log.write_text("AUROC 91%\n", encoding="utf-8")
 
-            rows = collect_fusion_rows(CONFIG, unit, 0, ["AUROC"])
+            rows = collect_fusion_rows(TEST_CONFIG, unit, 0, ["AUROC"])
 
             self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0].stage, CONFIG.validation_map["external"])
-            self.assertEqual(collect_modality_rows(CONFIG, unit, 0, ["AUROC"]), [])
+            self.assertEqual(rows[0].stage, "外部验证（队列 A）")
+            self.assertEqual(
+                collect_modality_rows(TEST_CONFIG, unit, 0, ["AUROC"]), []
+            )
 
     def test_external_only_workbook_omits_modality_sheet(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -397,6 +505,8 @@ class ExcelTests(unittest.TestCase):
             unit = Unit(
                 root=root,
                 validations=("external",),
+                internal_cohort="training",
+                external_cohorts=("cohort-a",),
                 settings=("setting",),
                 train_name="modality",
                 names=("name",),
@@ -412,13 +522,14 @@ class ExcelTests(unittest.TestCase):
                 / unit.models[0].id
                 / "eval"
                 / "name"
+                / "cohort-a"
                 / "results.log"
             )
             final_log.parent.mkdir(parents=True)
             final_log.write_text("AUROC 91%\n", encoding="utf-8")
             output = root / "results.xlsx"
 
-            build_workbook(replace(CONFIG, units=(unit,)), ["AUROC"], output)
+            build_workbook(replace(TEST_CONFIG, units=(unit,)), ["AUROC"], output)
 
             with zipfile.ZipFile(output) as workbook:
                 xml = ElementTree.fromstring(workbook.read("xl/workbook.xml"))

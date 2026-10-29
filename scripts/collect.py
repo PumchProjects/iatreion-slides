@@ -55,12 +55,19 @@ def get_rules(rule_file: Path) -> str:
     return "\n".join(lines)
 
 
-def write_results(exp_root: Path, names: tuple[str, ...], collect_rules: bool) -> None:
+def write_results(
+    exp_root: Path,
+    names: tuple[str, ...],
+    cohorts: tuple[str, ...],
+    collect_rules: bool,
+) -> None:
     for name in names:
         name_root = exp_root / "eval" / name
         modalities = "_".join(sorted(name.split("_")))
-        results = get_results(name_root / "eval.log")
-        (name_root / "results.log").write_text(results, encoding="utf-8")
+        for cohort in cohorts:
+            cohort_root = name_root / cohort
+            results = get_results(cohort_root / "eval.log")
+            (cohort_root / "results.log").write_text(results, encoding="utf-8")
 
         weights = get_weights(
             exp_root / "fusion" / modalities / "available_fusion.toml"
@@ -100,6 +107,7 @@ def collect_unit(config: ProjectConfig, unit: Unit) -> None:
                     write_results(
                         group_root / model.id,
                         unit.names,
+                        unit.external_cohorts,
                         collect_rules=model.name == "rrl",
                     )
 

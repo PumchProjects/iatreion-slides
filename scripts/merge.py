@@ -7,7 +7,6 @@ from pathlib import Path
 
 from config import CONFIG, Model, ProjectConfig, Unit
 
-
 MARKER = ".iatreion-merged-unit"
 
 

@@ -1,8 +1,8 @@
 import re
 import sys
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
 
 import xlsxwriter  # type: ignore[import]
 
@@ -19,7 +19,7 @@ METRIC_PATTERN = re.compile(
 
 @dataclass
 class TableRow:
-    comparison: tuple[int, str, str, str, str, str | None]
+    comparison: tuple[int, str, str, str, str, str, str | None]
     setting: str
     stage: str
     group: str
@@ -28,7 +28,7 @@ class TableRow:
     values: dict[str, float]
 
     @property
-    def best_key(self) -> tuple[int, str, str, str, str, str | None]:
+    def best_key(self) -> tuple[int, str, str, str, str, str, str | None]:
         return self.comparison
 
 
@@ -66,6 +66,13 @@ def group_label(config: ProjectConfig, group: str) -> str:
     return " : ".join(mapped(config.group_map, item) for item in group.split("_"))
 
 
+def validation_label(config: ProjectConfig, validation: str, cohort: str) -> str:
+    return (
+        f"{mapped(config.validation_map, validation)}"
+        f"（{mapped(config.cohort_map, cohort)}）"
+    )
+
+
 def model_label(
     config: ProjectConfig, model: Model, ref: str | None, refs: Sequence[str]
 ) -> str:
@@ -94,10 +101,23 @@ def training_fusion_log(
 
 
 def final_fusion_log(
-    unit: Unit, setting: str, group: str, model: Model, name: str
+    unit: Unit,
+    setting: str,
+    group: str,
+    model: Model,
+    name: str,
+    cohort: str,
 ) -> Path:
     return (
-        unit.root / setting / "final" / group / model.id / "eval" / name / "results.log"
+        unit.root
+        / setting
+        / "final"
+        / group
+        / model.id
+        / "eval"
+        / name
+        / cohort
+        / "results.log"
     )
 
 
@@ -139,12 +159,15 @@ def collect_fusion_rows(
                                         unit_index,
                                         setting,
                                         "internal",
+                                        unit.internal_cohort,
                                         group,
                                         name,
                                         ref,
                                     ),
                                     setting=setting_name,
-                                    stage=config.validation_map["internal"],
+                                    stage=validation_label(
+                                        config, "internal", unit.internal_cohort
+                                    ),
                                     group=group_name,
                                     item=item_name,
                                     model=model_label(config, model, ref, unit.refs),
@@ -157,30 +180,41 @@ def collect_fusion_rows(
                                 ),
                             )
                 if "external" in unit.validations:
-                    for model in unit.models:
-                        rows.append(
-                            TableRow(
-                                comparison=(
-                                    unit_index,
-                                    setting,
-                                    "external",
-                                    group,
-                                    name,
-                                    None,
-                                ),
-                                setting=setting_name,
-                                stage=config.validation_map["external"],
-                                group=group_name,
-                                item=item_name,
-                                model=model_label(config, model, None, unit.refs),
-                                values=read_metrics(
-                                    final_fusion_log(
-                                        unit, setting, group, model, name
+                    for cohort in unit.external_cohorts:
+                        for model in unit.models:
+                            rows.append(
+                                TableRow(
+                                    comparison=(
+                                        unit_index,
+                                        setting,
+                                        "external",
+                                        cohort,
+                                        group,
+                                        name,
+                                        None,
                                     ),
-                                    metrics,
-                                ),
+                                    setting=setting_name,
+                                    stage=validation_label(
+                                        config, "external", cohort
+                                    ),
+                                    group=group_name,
+                                    item=item_name,
+                                    model=model_label(
+                                        config, model, None, unit.refs
+                                    ),
+                                    values=read_metrics(
+                                        final_fusion_log(
+                                            unit,
+                                            setting,
+                                            group,
+                                            model,
+                                            name,
+                                            cohort,
+                                        ),
+                                        metrics,
+                                    ),
+                                )
                             )
-                        )
     return rows
 
 
@@ -207,12 +241,15 @@ def collect_modality_rows(
                                     unit_index,
                                     setting,
                                     "internal",
+                                    unit.internal_cohort,
                                     group,
                                     modality,
                                     ref,
                                 ),
                                 setting=setting_name,
-                                stage=config.validation_map["internal"],
+                                stage=validation_label(
+                                    config, "internal", unit.internal_cohort
+                                ),
                                 group=group_name,
                                 item=item_name,
                                 model=model_label(config, model, ref, unit.refs),
@@ -229,8 +266,10 @@ def collect_modality_rows(
 
 def best_values(
     rows: Sequence[TableRow], metrics: Sequence[str]
-) -> dict[tuple[tuple[int, str, str, str, str, str | None], str], float]:
-    result: dict[tuple[tuple[int, str, str, str, str, str | None], str], float] = {}
+) -> dict[tuple[tuple[int, str, str, str, str, str, str | None], str], float]:
+    result: dict[
+        tuple[tuple[int, str, str, str, str, str, str | None], str], float
+    ] = {}
     for row in rows:
         for metric in metrics:
             key = (row.best_key, metric)
@@ -280,10 +319,10 @@ def write_sheet(
     worksheet.freeze_panes(1, 0)
     if rows:
         worksheet.autofilter(0, 0, len(rows), len(headers) - 1)
-    worksheet.set_column(0, 0, 34, text_format)
-    worksheet.set_column(1, 1, 12, text_format)
+    worksheet.set_column(0, 0, 18, text_format)
+    worksheet.set_column(1, 1, 20, text_format)
     worksheet.set_column(2, 2, 14, text_format)
-    worksheet.set_column(3, 3, 18, text_format)
+    worksheet.set_column(3, 3, 22, text_format)
     worksheet.set_column(4, 4, 14, text_format)
     worksheet.set_column(5, len(headers) - 1, 11, number_format)
 
