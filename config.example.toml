@@ -1,95 +1,16 @@
-remote_host = "example-host"
+remote_host = "research-server"
 
-[collect]
-n_folds = 5
-importance_models = [
-    "xgboost",
-    "random-forest",
-]
+[exports]
+remote_root = "/path/to/exports"
+local_root = "data/paper_exports"
 
-[excel]
-metrics = [ "AUROC", "AUPRC", "ACC", "F1", "SEN", "SPC" ]
-output = "outputs/results.xlsx"
+[evaluation]
+runs = ["example_run"]
+bootstrap = 2000
+seed = 42
+output = "outputs/paper_tables"
 
-[report]
-title = "Experiment Results"
-subtitle = "Progress Report"
-author = "Research Team"
-footer = "Progress Report"
-
-[validation_map]
-internal = "内部验证"
-external = "外部验证"
-
-[cohort_map]
-training = "训练队列"
-cohort-a = "队列 A"
-cohort-b = "队列 B"
-
-[setting_map]
-logs_imputed = "填补缺失值"
-logs_not_imputed = "不填补缺失值"
-
-[name_map]
-h-demo_h-mmse_h-moca_h-mri_h-history_sh-apoe-labdata = "原始体积"
-h-demo_h-mmse_h-moca_h-mri-roi_h-history_sh-apoe-labdata = "大脑区"
-h-nonimaging_h-mri = "非影像 + 原始体积"
-h-nonimaging_h-mri-roi = "非影像 + 大脑区"
-
-[modality_map]
-h-demo = "人口学"
-h-history = "病史"
-h-mmse = "MMSE"
-h-moca = "MoCA"
-h-mri = "核磁"
-h-mri-roi = "核磁 ROI"
-h-nonimaging = "非影像"
-h-plasma = "血浆生物标记物"
-sh-apoe-labdata = "APOE 与血化验"
-
-[group_map]
-"A+" = "A+"
-"A-" = "A-"
-"T+" = "T+"
-"T-" = "T-"
-fast = "快进展"
-slow = "慢进展"
-
-[model_map]
-random-forest = "随机森林"
-rrl = "RRL"
-rrl-variant = "RRL, Variant"
-xgboost = "XGBoost"
-
-[ref_map]
-calibrated-fusion = "校准融合"
-
-[[downloads]]
-id = "run-a"
-remote_root = "/srv/experiments/run-a"
-local_root = "data/downloads/run-a"
-
-[[downloads]]
-id = "run-b"
-remote_root = "/srv/experiments/run-b"
-local_root = "data/downloads/run-b"
-
-[[units]]
-root = "data/combined"
-validations = [ "internal", "external" ]
-internal_cohort = "training"
-external_cohorts = [ "cohort-a", "cohort-b" ]
-settings = [ "logs_imputed", "logs_not_imputed" ]
-train_name = "h-nonimaging_h-mri_h-mri-roi"
-names = [
-    "h-nonimaging_h-mri",
-    "h-nonimaging_h-mri-roi",
-]
-groups = [ "slow_fast" ]
-models = [
-    { download = "run-a", name = "xgboost" },
-    { download = "run-a", name = "random-forest" },
-    { download = "run-a", name = "rrl" },
-    { download = "run-b", name = "rrl", suffix = "-variant" },
-]
-refs = [ "calibrated-fusion" ]
+[[runs]]
+id = "example_run"
+remote_root = "/path/to/experiment"
+local_root = "data/downloads/example_run"

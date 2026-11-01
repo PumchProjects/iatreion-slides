@@ -222,6 +222,9 @@ __marimo__/
 !/README.md
 
 # Local configuration and generated data
-/config*.toml
+/config.toml
 /data/
 /outputs/
+
+# macOS metadata
+.DS_Store

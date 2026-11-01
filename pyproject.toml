@@ -1,0 +1,28 @@
+[project]
+name = "iatreion-slides"
+version = "0.1.0"
+description = "Offline evaluation of frozen Iatreion predictions and explanations."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "numpy>=2",
+    "openpyxl>=3.1",
+    "pandas>=2.2",
+    "scikit-learn>=1.6",
+    "scipy>=1.14",
+    "xlsxwriter>=3.2",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "UP", "B", "SIM", "I"]
+
+[tool.ruff.format]
+quote-style = "single"

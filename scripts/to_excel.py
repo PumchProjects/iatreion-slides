@@ -1,357 +1,75 @@
-import re
-import sys
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+"""Readable metric workbook from the long-form prediction evaluation tables."""
+
+import argparse
 from pathlib import Path
 
-import xlsxwriter  # type: ignore[import]
-
-from config import CONFIG, Model, ProjectConfig, Unit
-
-METRIC_ALIASES = {
-    "AUC": "AUROC",
-}
-METRIC_PATTERN = re.compile(
-    r"^\s*(?P<metric>[A-Za-z0-9_+-]+)\s+(?P<value>-?\d+(?:\.\d+)?)%",
-    re.MULTILINE,
-)
+import pandas as pd
+import xlsxwriter
 
 
-@dataclass
-class TableRow:
-    comparison: tuple[int, str, str, str, str, str, str | None]
-    setting: str
-    stage: str
-    group: str
-    item: str
-    model: str
-    values: dict[str, float]
-
-    @property
-    def best_key(self) -> tuple[int, str, str, str, str, str, str | None]:
-        return self.comparison
-
-
-def normalize_metric(metric: str) -> str:
-    metric = metric.strip().upper()
-    return METRIC_ALIASES.get(metric, metric)
-
-
-def normalize_metrics(metrics: Iterable[str]) -> list[str]:
-    result: list[str] = []
-    for raw_metric in metrics:
-        for metric in re.split(r"[,\s]+", raw_metric):
-            if metric:
-                result.append(normalize_metric(metric))
-    return list(dict.fromkeys(result))
-
-
-def read_metrics(log_path: Path, metrics: Sequence[str]) -> dict[str, float]:
-    data = log_path.read_text(encoding="utf-8")
-    found = {
-        normalize_metric(match.group("metric")): float(match.group("value"))
-        for match in METRIC_PATTERN.finditer(data)
-    }
-    missing = [metric for metric in metrics if metric not in found]
-    if missing:
-        raise ValueError(f"{log_path} is missing metrics: {', '.join(missing)}")
-    return {metric: found[metric] for metric in metrics}
-
-
-def mapped(mapping: dict[str, str], key: str) -> str:
-    return mapping.get(key, key)
-
-
-def group_label(config: ProjectConfig, group: str) -> str:
-    return " : ".join(mapped(config.group_map, item) for item in group.split("_"))
-
-
-def validation_label(config: ProjectConfig, validation: str, cohort: str) -> str:
-    return (
-        f"{mapped(config.validation_map, validation)}"
-        f"（{mapped(config.cohort_map, cohort)}）"
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument('--input', type=Path, default=Path('outputs/paper_tables/D5'))
+    p.add_argument(
+        '--output', type=Path, default=Path('outputs/prediction_metrics.xlsx')
     )
-
-
-def model_label(
-    config: ProjectConfig, model: Model, ref: str | None, refs: Sequence[str]
-) -> str:
-    label = mapped(config.model_map, model.id)
-    if ref is not None and len(refs) > 1:
-        label += f"（{mapped(config.ref_map, ref)}）"
-    return label
-
-
-def training_fusion_log(
-    unit: Unit, setting: str, group: str, model: Model, ref: str, name: str
-) -> Path:
-    ref_name = ref.replace("-", "_")
-    return (
-        unit.root
-        / setting
-        / "training"
-        / unit.train_name
-        / group
-        / "result-replay"
-        / model.id
-        / ref
-        / name
-        / f"train_ci_all_{ref_name}_youden.log"
-    )
-
-
-def final_fusion_log(
-    unit: Unit,
-    setting: str,
-    group: str,
-    model: Model,
-    name: str,
-    cohort: str,
-) -> Path:
-    return (
-        unit.root
-        / setting
-        / "final"
-        / group
-        / model.id
-        / "eval"
-        / name
-        / cohort
-        / "results.log"
-    )
-
-
-def modality_log(
-    unit: Unit, setting: str, group: str, model: Model, ref: str, modality: str
-) -> Path:
-    log_model = model.parser_id if model.name == "rrl" else model.id
-    return (
-        unit.root
-        / setting
-        / "training"
-        / unit.train_name
-        / group
-        / log_model
-        / ref
-        / f"train_ci_{modality}.log"
-    )
-
-
-def collect_fusion_rows(
-    config: ProjectConfig,
-    unit: Unit,
-    unit_index: int,
-    metrics: Sequence[str],
-) -> list[TableRow]:
-    rows: list[TableRow] = []
-    for setting in unit.settings:
-        setting_name = mapped(config.setting_map, setting)
-        for name in unit.names:
-            item_name = mapped(config.name_map, name)
-            for group in unit.groups:
-                group_name = group_label(config, group)
-                if "internal" in unit.validations:
-                    for ref in unit.refs:
-                        for model in unit.models:
-                            rows.append(
-                                TableRow(
-                                    comparison=(
-                                        unit_index,
-                                        setting,
-                                        "internal",
-                                        unit.internal_cohort,
-                                        group,
-                                        name,
-                                        ref,
-                                    ),
-                                    setting=setting_name,
-                                    stage=validation_label(
-                                        config, "internal", unit.internal_cohort
-                                    ),
-                                    group=group_name,
-                                    item=item_name,
-                                    model=model_label(config, model, ref, unit.refs),
-                                    values=read_metrics(
-                                        training_fusion_log(
-                                            unit, setting, group, model, ref, name
-                                        ),
-                                        metrics,
-                                    ),
-                                ),
-                            )
-                if "external" in unit.validations:
-                    for cohort in unit.external_cohorts:
-                        for model in unit.models:
-                            rows.append(
-                                TableRow(
-                                    comparison=(
-                                        unit_index,
-                                        setting,
-                                        "external",
-                                        cohort,
-                                        group,
-                                        name,
-                                        None,
-                                    ),
-                                    setting=setting_name,
-                                    stage=validation_label(
-                                        config, "external", cohort
-                                    ),
-                                    group=group_name,
-                                    item=item_name,
-                                    model=model_label(
-                                        config, model, None, unit.refs
-                                    ),
-                                    values=read_metrics(
-                                        final_fusion_log(
-                                            unit,
-                                            setting,
-                                            group,
-                                            model,
-                                            name,
-                                            cohort,
-                                        ),
-                                        metrics,
-                                    ),
-                                )
-                            )
-    return rows
-
-
-def collect_modality_rows(
-    config: ProjectConfig,
-    unit: Unit,
-    unit_index: int,
-    metrics: Sequence[str],
-) -> list[TableRow]:
-    rows: list[TableRow] = []
-    if "internal" not in unit.validations:
-        return rows
-    for setting in unit.settings:
-        setting_name = mapped(config.setting_map, setting)
-        for group in unit.groups:
-            group_name = group_label(config, group)
-            for modality in unit.modalities:
-                item_name = mapped(config.modality_map, modality)
-                for ref in unit.refs:
-                    for model in unit.models:
-                        rows.append(
-                            TableRow(
-                                comparison=(
-                                    unit_index,
-                                    setting,
-                                    "internal",
-                                    unit.internal_cohort,
-                                    group,
-                                    modality,
-                                    ref,
-                                ),
-                                setting=setting_name,
-                                stage=validation_label(
-                                    config, "internal", unit.internal_cohort
-                                ),
-                                group=group_name,
-                                item=item_name,
-                                model=model_label(config, model, ref, unit.refs),
-                                values=read_metrics(
-                                    modality_log(
-                                        unit, setting, group, model, ref, modality
-                                    ),
-                                    metrics,
-                                ),
-                            )
+    args = p.parse_args()
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    with xlsxwriter.Workbook(args.output, {'nan_inf_to_errors': False}) as book:
+        header = book.add_format(
+            {
+                'bold': True,
+                'bg_color': '#143A4A',
+                'font_color': 'white',
+                'text_wrap': True,
+            }
+        )
+        number = book.add_format({'num_format': '0.0000'})
+        for name in ['metrics', 'confusion', 'calibration', 'paired_comparisons']:
+            d = pd.read_csv(args.input / (name + '.csv'))
+            sheet = book.add_worksheet(name)
+            sheet.freeze_panes(1, 0)
+            sheet.hide_gridlines(2)
+            sheet.set_row(0, 38)
+            for j, c in enumerate(d):
+                sheet.write(0, j, c, header)
+                sheet.set_column(j, j, 24 if d[c].dtype == 'object' else 17)
+            for i, row in enumerate(d.itertuples(index=False, name=None), 1):
+                for j, value in enumerate(row):
+                    if pd.isna(value):
+                        continue
+                    sheet.write(
+                        i, j, value, number if isinstance(value, float) else None
+                    )
+            sheet.autofilter(0, 0, len(d), len(d.columns) - 1)
+            if name == 'metrics':
+                j = d.columns.get_loc('value')
+                for direction, group in d.groupby('better'):
+                    # Each comparison contains the same metric and target population.
+                    keys = [
+                        'run_id',
+                        'setting',
+                        'stage',
+                        'cohort',
+                        'subset',
+                        'task',
+                        'evaluation_label_version',
+                        'threshold_mode',
+                        'metric',
+                    ]
+                    for _, g in group.groupby([k for k in keys if k in d]):
+                        best = g.value.min() if direction == 'lower' else g.value.max()
+                        best_fmt = book.add_format(
+                            {
+                                'bold': True,
+                                'bg_color': '#CCE9DF',
+                                'num_format': '0.0000',
+                            }
                         )
-    return rows
+                        for ix in g.index[g.value.eq(best)]:
+                            sheet.write_number(int(ix) + 1, j, float(best), best_fmt)
+    print(args.output)
 
 
-def best_values(
-    rows: Sequence[TableRow], metrics: Sequence[str]
-) -> dict[tuple[tuple[int, str, str, str, str, str, str | None], str], float]:
-    result: dict[
-        tuple[tuple[int, str, str, str, str, str, str | None], str], float
-    ] = {}
-    for row in rows:
-        for metric in metrics:
-            key = (row.best_key, metric)
-            value = row.values[metric]
-            if key not in result or value > result[key]:
-                result[key] = value
-    return result
-
-
-def write_sheet(
-    workbook: xlsxwriter.Workbook,
-    sheet_name: str,
-    rows: Sequence[TableRow],
-    metrics: Sequence[str],
-) -> None:
-    worksheet = workbook.add_worksheet(sheet_name)
-    headers = ["设置", "阶段", "分组", "项目", "模型", *metrics]
-
-    header_format = workbook.add_format(
-        {"bold": True, "font_size": 12, "align": "center", "valign": "vcenter"}
-    )
-    text_format = workbook.add_format({"font_size": 11, "valign": "vcenter"})
-    number_format = workbook.add_format(
-        {"font_size": 11, "num_format": "0.00", "valign": "vcenter"}
-    )
-    best_number_format = workbook.add_format(
-        {"bold": True, "font_size": 11, "num_format": "0.00", "valign": "vcenter"}
-    )
-
-    for col, header in enumerate(headers):
-        worksheet.write(0, col, header, header_format)
-
-    bests = best_values(rows, metrics)
-    for row_idx, row in enumerate(rows, start=1):
-        for col, value_str in enumerate(
-            [row.setting, row.stage, row.group, row.item, row.model]
-        ):
-            worksheet.write(row_idx, col, value_str, text_format)
-        for metric_idx, metric in enumerate(metrics, start=5):
-            value = row.values[metric]
-            best = bests[(row.best_key, metric)]
-            cell_format = (
-                best_number_format if abs(value - best) < 1e-9 else number_format
-            )
-            worksheet.write_number(row_idx, metric_idx, value, cell_format)
-
-    worksheet.freeze_panes(1, 0)
-    if rows:
-        worksheet.autofilter(0, 0, len(rows), len(headers) - 1)
-    worksheet.set_column(0, 0, 18, text_format)
-    worksheet.set_column(1, 1, 20, text_format)
-    worksheet.set_column(2, 2, 14, text_format)
-    worksheet.set_column(3, 3, 22, text_format)
-    worksheet.set_column(4, 4, 14, text_format)
-    worksheet.set_column(5, len(headers) - 1, 11, number_format)
-
-
-def build_workbook(config: ProjectConfig, metrics: Sequence[str], output: Path) -> None:
-    fusion_rows: list[TableRow] = []
-    modality_rows: list[TableRow] = []
-    for unit_index, unit in enumerate(config.units):
-        fusion_rows.extend(collect_fusion_rows(config, unit, unit_index, metrics))
-        modality_rows.extend(collect_modality_rows(config, unit, unit_index, metrics))
-
-    output.parent.mkdir(parents=True, exist_ok=True)
-    workbook = xlsxwriter.Workbook(str(output))
-    try:
-        write_sheet(workbook, "校准融合", fusion_rows, metrics)
-        if modality_rows:
-            write_sheet(workbook, "各模态", modality_rows, metrics)
-    finally:
-        workbook.close()
-
-
-def main() -> None:
-    if len(sys.argv) != 1:
-        raise SystemExit(f"Usage: {sys.argv[0]}")
-
-    metrics = normalize_metrics(CONFIG.excel.metrics)
-    build_workbook(CONFIG, metrics, CONFIG.excel.output)
-    print(f"Wrote {CONFIG.excel.output}")
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
