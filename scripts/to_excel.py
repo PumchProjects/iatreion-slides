@@ -25,7 +25,14 @@ def main():
             }
         )
         number = book.add_format({'num_format': '0.0000'})
-        for name in ['metrics', 'confusion', 'calibration', 'paired_comparisons']:
+        for name in [
+            'metrics',
+            'confusion',
+            'calibration',
+            'paired_comparisons',
+            'implementation_agreement',
+            'implementation_differences',
+        ]:
             d = pd.read_csv(args.input / (name + '.csv'))
             sheet = book.add_worksheet(name)
             sheet.freeze_panes(1, 0)
@@ -46,7 +53,12 @@ def main():
                 j = d.columns.get_loc('value')
                 for direction, group in d.groupby('better'):
                     # Each comparison contains the same metric and target population.
+                    group = group[
+                        (group.model != 'rrl')
+                        | (group.inference_engine == 'rrl_parser')
+                    ]
                     keys = [
+                        'prediction_kind',
                         'run_id',
                         'setting',
                         'stage',

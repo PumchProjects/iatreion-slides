@@ -15,6 +15,8 @@ KEYS = [
     'run_id',
     'setting',
     'model',
+    'inference_engine',
+    'prediction_kind',
     'stage',
     'cohort',
     'subset',
@@ -79,6 +81,16 @@ def predictions(source, runs, labels):
         )
         d['model_label_version'] = meta['label_version']
         d['threshold_source'] = meta['threshold_source']
+        d['training_visit_selection'] = meta.get('training_visit_selection', '')
+        d['evaluation_visit_selection'] = meta.get('visit_selection', '')
+        d['source_sha256'] = meta.get('source_sha256', '')
+        d['prediction_implementation'] = meta['inference_engine']
+        d['fusion_fit_engine'] = meta['fusion_fit_engine']
+        d['fusion_artifacts'] = json.dumps(
+            meta.get('fusion_artifacts', []), sort_keys=True
+        )
+        d['source_log'] = meta.get('source_log', '')
+        d['source_log_sha256'] = meta.get('source_log_sha256', '')
         d['source_prediction'] = str(path)
         d['configuration'] = '|'.join(str(meta[k]) for k in KEYS)
         d.loc[d.unavailable, ['probability', 'y_pred']] = np.nan
@@ -116,6 +128,11 @@ def evaluate(data, root, resamples, seed):
         ident['configuration'] = configuration
         for label_column in ['y_true', 'y_true_baseline']:
             if label_column not in g:
+                continue
+            if (
+                label_column == 'y_true_baseline'
+                and g.model_label_version.eq('baseline_ols_le3_v1').all()
+            ):
                 continue
             label_version = (
                 g.iloc[0]['model_label_version']
@@ -185,14 +202,28 @@ def evaluate(data, root, resamples, seed):
         )
         save(root, name, df, description)
     paired = []
-    groupcols = ['run_id', 'setting', 'stage', 'cohort', 'subset', 'task']
-    for keys, g in data.groupby(groupcols, sort=False):
+    groupcols = [
+        'run_id',
+        'setting',
+        'stage',
+        'cohort',
+        'subset',
+        'task',
+        'prediction_kind',
+    ]
+    primary = data[(data.model != 'rrl') | (data.inference_engine == 'rrl_parser')]
+    for keys, g in primary.groupby(groupcols, sort=False):
         for a, b in combinations(sorted(g.model.unique()), 2):
             left = g[(g.model == a) & ~g.unavailable].set_index('subject_id')
             right = g[(g.model == b) & ~g.unavailable].set_index('subject_id')
             common = left.index.intersection(right.index).sort_values()
             for col in ['y_true', 'y_true_baseline']:
                 if col not in g:
+                    continue
+                if (
+                    col == 'y_true_baseline'
+                    and g.model_label_version.eq('baseline_ols_le3_v1').all()
+                ):
                     continue
                 ids = common[
                     left.loc[common, col].notna() & right.loc[common, col].notna()
@@ -214,6 +245,9 @@ def evaluate(data, root, resamples, seed):
                     **dict(zip(groupcols, keys, strict=True)),
                     'model_a': a,
                     'model_b': b,
+                    'inference_engine_a': x.inference_engine.iloc[0],
+                    'inference_engine_b': z.inference_engine.iloc[0],
+                    'n_common': len(ids),
                     'label_column': col,
                 }.items():
                     table[k] = v
@@ -227,124 +261,102 @@ def evaluate(data, root, resamples, seed):
         '同一配置、共同可预测受试者的配对 bootstrap 指标差（模型 A − 模型 B）。',
     )
 
+    compare_implementations(data, root, resamples, seed)
+
+
+def compare_implementations(data, root, resamples, seed):
+    keys = ['run_id', 'setting', 'stage', 'cohort', 'subset', 'task', 'prediction_kind']
+    rows, differences = [], []
+    for key, group in data[data.model == 'rrl'].groupby(keys, sort=False):
+        left = group[
+            (group.inference_engine == 'rrl_parser') & ~group.unavailable
+        ].set_index('subject_id')
+        right = group[
+            (group.inference_engine == 'rrl_neural') & ~group.unavailable
+        ].set_index('subject_id')
+        common = left.index.intersection(right.index).sort_values()
+        for column in ['y_true', 'y_true_baseline']:
+            if column not in group:
+                continue
+            if (
+                column == 'y_true_baseline'
+                and group.model_label_version.eq('baseline_ols_le3_v1').all()
+            ):
+                continue
+            ids = common[
+                left.loc[common, column].notna() & right.loc[common, column].notna()
+            ]
+            if not len(ids):
+                continue
+            a, b = left.loc[ids], right.loc[ids]
+            np.testing.assert_array_equal(a[column], b[column])
+            np.testing.assert_array_equal(a.outer_fold, b.outer_fold)
+            np.testing.assert_allclose(a.threshold, b.threshold)
+            delta = a.probability.to_numpy() - b.probability.to_numpy()
+            ident = dict(
+                zip(keys, key, strict=True),
+                label_column=column,
+                n_common=len(ids),
+                implementation_a='rrl_parser',
+                implementation_b='rrl_neural',
+            )
+            rows.append(
+                dict(
+                    **ident,
+                    mean_probability_difference=delta.mean(),
+                    mean_absolute_probability_difference=np.abs(delta).mean(),
+                    max_absolute_probability_difference=np.abs(delta).max(),
+                    classification_agreement=np.mean(
+                        a.y_pred.to_numpy() == b.y_pred.to_numpy()
+                    ),
+                )
+            )
+            table = paired_difference(
+                a[column].astype(int),
+                a.probability,
+                a.y_pred.astype(int),
+                b.probability,
+                b.y_pred.astype(int),
+                resamples,
+                seed,
+            )
+            table = table[table.metric.isin(['AUROC', 'AP', 'Brier'])].copy()
+            for k, value in ident.items():
+                table[k] = value
+            differences.append(table)
+    save(
+        root,
+        'implementation_agreement',
+        pd.DataFrame(
+            rows,
+            columns=keys
+            + [
+                'label_column',
+                'n_common',
+                'implementation_a',
+                'implementation_b',
+                'mean_probability_difference',
+                'mean_absolute_probability_difference',
+                'max_absolute_probability_difference',
+                'classification_agreement',
+            ],
+        ),
+        '相同受试者、标签、折分和冻结阈值下，parser 与 neural 的概率差和分类一致率。',
+    )
+    save(
+        root,
+        'implementation_differences',
+        pd.concat(differences, ignore_index=True)
+        if differences
+        else pd.DataFrame(columns=keys + ['metric', 'difference']),
+        '实现差值为 parser − neural；共同受试者配对 bootstrap。',
+    )
+
 
 def explanations(source, runs, root):
-    long = []
-    global_rows = []
-    checks = []
-    validation = []
-    for path in sorted((source / 'shap').glob('**/*.npz')):
-        meta = json.loads(path.with_suffix('.json').read_text())
-        if meta['run_id'] not in runs:
-            continue
-        with np.load(path, allow_pickle=False) as z:
-            values = z['values']
-            base = z['base_values']
-            ids = z['sample_id'].astype(str)
-            features = z['feature_names']
-            outputs = z['output_names']
-            x = z['data']
-            reference = z['reference_output'].reshape(len(ids), len(outputs))
-            if values.ndim == 2:
-                values = values[:, :, None]
-            if base.ndim == 1:
-                base = (
-                    np.broadcast_to(base, (len(ids), len(outputs)))
-                    if len(base) == len(outputs)
-                    else base[:, None]
-                )
-            for k, output in enumerate(outputs):
-                g = pd.DataFrame(
-                    dict(
-                        feature=features,
-                        mean_abs_shap=np.nanmean(np.abs(values[:, :, k]), axis=0),
-                        mean_shap=np.nanmean(values[:, :, k], axis=0),
-                        output=output,
-                        n_explained=len(ids),
-                    )
-                )
-                for key, value in meta.items():
-                    g[key] = value
-                global_rows.append(g)
-                frame = pd.DataFrame(
-                    dict(
-                        subject_id=np.repeat(ids, len(features)),
-                        feature=np.tile(features, len(ids)),
-                        feature_value=x.ravel(),
-                        shap_value=values[:, :, k].ravel(),
-                        base_value=np.repeat(base[:, k], len(features)),
-                        output=output,
-                    )
-                )
-                for key in [
-                    'run_id',
-                    'setting',
-                    'model',
-                    'module',
-                    'cohort',
-                    'task',
-                    'label_version',
-                    'training_visit_selection',
-                    'data_scope',
-                    'output_space',
-                ]:
-                    frame[key] = meta[key]
-                frame['feature_value_space'] = 'model_transformed'
-                long.append(frame)
-                reconstructed = base[:, k] + np.sum(values[:, :, k], axis=1)
-                for sid, p, q in zip(ids, reconstructed, reference[:, k], strict=True):
-                    validation.append(
-                        dict(
-                            run_id=meta['run_id'],
-                            setting=meta['setting'],
-                            model=meta['model'],
-                            module=meta['module'],
-                            subject_id=sid,
-                            output=output,
-                            shap_sum=p,
-                            reference_output=q,
-                            absolute_error=abs(p - q),
-                            reference_model='parsed_RRL'
-                            if meta['model'] == 'rrl'
-                            else 'frozen_tree',
-                            output_space=meta['output_space'],
-                        )
-                    )
-                for sid, p in zip(ids, reconstructed, strict=True):
-                    checks.append(
-                        dict(
-                            run_id=meta['run_id'],
-                            setting=meta['setting'],
-                            model=meta['model'],
-                            module=meta['module'],
-                            subject_id=sid,
-                            output=output,
-                            reconstructed_output=p,
-                            output_space=meta['output_space'],
-                        )
-                    )
-    root.mkdir(parents=True, exist_ok=True)
-    save(
-        root,
-        'shap_validation',
-        pd.DataFrame(validation),
-        'SHAP 加和输出与相同样本、相同尺度的单模态原始预测逐人核对。',
-    )
-    pd.concat(long, ignore_index=True).to_csv(
-        root / 'shap_values.csv.gz', index=False, compression='gzip'
-    )
-    save(
-        root,
-        'shap_global',
-        pd.concat(global_rows, ignore_index=True),
-        '按训练解释样本计算的 SHAP 全局汇总。',
-    )
-    save(
-        root,
-        'shap_additivity',
-        pd.DataFrame(checks),
-        '基础值加 SHAP 贡献之和；用于与冻结模型同尺度预测核对。',
-    )
+    from scripts.shap_summary import summarize
+
+    summarize(source, runs, root, save)
     rule_tables = []
     for path in sorted((source / 'rules').glob('**/*.csv')):
         run, setting, cohort = path.relative_to(source / 'rules').parts[:3]
@@ -364,15 +376,34 @@ def explanations(source, runs, root):
     save(
         root,
         'rules',
-        pd.concat(rule_tables, ignore_index=True),
+        pd.concat(rule_tables, ignore_index=True)
+        if rule_tables
+        else pd.DataFrame(columns=['explanation_engine', 'Rule']),
         '冻结 RRL 规则在各外部队列的有效性、激活、事件和效应统计；保留原始规则表达。',
     )
 
 
 def dictionary(root):
     descriptions = {
+        'comparison_eligible': '该折跨模型比较组特征集合一致且原尺度加和通过核对',
+        'comparison_exclusion': (
+            '整组排除原因：特征集合不同，或模型输出与历史 SHAP 不一致'
+        ),
+        'additivity_passed': '可用记录的原尺度加和误差均不超过 1e-4',
+        'inference_engine': (
+            'rrl_parser 为部署规则解析器；rrl_neural 为神经网络；tree 为树模型'
+        ),
+        'prediction_kind': (
+            'raw 为未校准单模态；calibrated_fusion 包括校准单模态和多模态融合'
+        ),
+        'fusion_fit_engine': '拟合校准、权重和阈值的实现；RRL 始终为 rrl_neural',
+        'fusion_artifacts': '冻结参数的原路径、SHA-256 和导出副本路径',
+        'explanation_engine': '解释所对应的实际模型实现',
+        'reference_engine': 'SHAP 加和检查参考输出的实现；必须与解释一致',
+        'prediction_implementation': '与 inference_engine 一致',
+        'source_log': '与该预测数组配套的历史日志',
         'probability': '阳性类预测概率；融合配置为校准融合后的概率',
-        'y_true': '训练运行采用的原始标签，1 为快进展',
+        'y_true': '训练运行采用的原始标签：1 为 A+、T+ 或快进展，见 task',
         'y_true_baseline': '预测基线起算、OLS 斜率 ≤−3 的新标签',
         'threshold': '每名受试者实际使用的开发侧阈值',
         'unavailable': '没有可用预测；概率及类别留空',
@@ -383,7 +414,13 @@ def dictionary(root):
         'bootstrap_valid': '该指标产生有限估计的重抽样次数',
         'configuration': '运行、处理设置、模型、验证阶段、队列和特征方案的组合',
         'feature_value_space': 'SHAP 特征值为模型变换后的空间；原始单位及变换见 D3',
-        'data_scope': '解释样本来源，training 为最终模型训练人群',
+        'data_scope': 'held-out 为外层测试折；training 为最终训练人群，分别汇总',
+        'relative_importance': '阳性类每折 mean-|SHAP| 除以该折全部特征之和',
+        'relative_mean': '折内归一化份额的等权均值，随后才选展示特征',
+        'relative_sd': '折间总体标准差（ddof=0），不是均值的置信区间',
+        'n_folds': '参与该汇总的折数；最终训练模型为 1',
+        'n_explained': '共同且模态可用的解释人数；汇总表为各折人数之和',
+        'same_feature_set': '同组各模型的完整特征集合是否相同',
         'output_space': '解释的模型输出尺度，如 probability 或 logit',
         'model_label_version': '开发模型时使用的标签版本',
         'evaluation_label_version': '计算本行指标采用的标签版本',
@@ -427,7 +464,9 @@ def main():
     runs = args.runs or config['evaluation']['runs']
     output = args.output or Path(config['evaluation']['output'])
     labels = (
-        pd.read_csv(args.labels, dtype={'subject_id': str}) if args.labels else None
+        pd.read_csv(args.labels, dtype={'subject_id': str, 'cohort': str})
+        if args.labels
+        else None
     )
     if 'D5' in args.tables:
         data = predictions(source, runs, labels)

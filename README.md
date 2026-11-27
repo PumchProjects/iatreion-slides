@@ -94,7 +94,8 @@ uv run --no-sync python scripts/export_predictions.py \
 Use `--feature-scheme clinical` for the full clinical modality scheme. Set the
 label version to the definition used in that run. The exporter packages current
 schema-v2 internal out-of-fold (OOF) predictions, external predictions, rules,
-and SHAP artifacts. The collector consumes this format directly.
+and SHAP artifacts. The collector consumes this format directly. Historical formats are converted
+by one-time preparation scripts in the paper workspace.
 
 Point `[exports].remote_root` at the export directory and add the run ID to
 `[evaluation].runs`. No retraining is needed to change offline metrics.
@@ -139,6 +140,37 @@ TSH inclusion and MRI representation are alternative replay branches:
 Each replay configuration selects one TSH branch and one MRI branch, yielding
 four combinations while reusing the other trained modalities.
 
+## RRL implementation identity and frozen replay
+
+The primary RRL evaluation uses the discrete parser. Its raw modality probabilities
+are combined with the **neural-development** Platt coefficients, fusion weights,
+and thresholds. The exporter joins modality predictions by participant ID and
+outer fold, verifies their labels, and applies the saved artifacts directly.
+`result-replay` fits development fusion parameters; it is not used to refit parser
+parameters for the primary evaluation.
+
+Required JSON identity fields:
+
+| Field | Values or meaning |
+| --- | --- |
+| `inference_engine` | `tree`, `rrl_neural`, or `rrl_parser`. |
+| `prediction_kind` | `raw` or `calibrated_fusion`, including calibrated single modalities. |
+| `fusion_fit_engine` | Implementation that fitted postprocessing; `rrl_neural` for RRL. |
+| `fusion_artifacts` | Parameter paths, SHA-256 hashes, and exported copies. |
+
+Engine and prediction kind are part of both the directory path and D5 configuration
+identity, so raw/calibrated singleton and neural/parser records cannot overwrite
+each other. Paired cross-model comparisons select parser RRL. Separate
+`implementation_agreement.csv` and `implementation_differences.csv` report
+probability differences, classification agreement, and paired AUROC/AP/Brier
+differences (parser minus neural). Original and baseline MMSE labels are evaluated
+once when their version is already identical.
+
+Export with `--development-data /path/to/development.csv` to include final-rule
+coverage in the development population as well as external populations.
+`--tasks`, `--models`, `--settings`, and `--parts` support targeted checks. The
+exporter also packages outer-test SHAP and the frozen fusion artifacts.
+
 ## Metrics and calibration
 
 The metric table reports AUROC, trapezoidal precision–recall AUC (`PR_AUC`),
@@ -172,30 +204,49 @@ For a comparison between two runs, collect their D5 tables separately and use:
 uv run --locked python -m scripts.compare \
   --left outputs/run_a/D5/predictions.csv \
   --right outputs/run_b/D5/predictions.csv \
-  --left-run run_a --right-run run_b --cohort AIBL \
+  --left-run run_a --right-run run_b --cohort AIBL --task MMSE --label-column y_true_baseline \
+  --left-subset h-demo_h-mmse_h-moca_h-mri-roi_h-history_sh-apoe-labdata-no-tsh \
+  --right-subset h-nonimaging-no-tsh_h-mri-roi \
   --output outputs/comparisons/run_a_vs_run_b.csv
 ```
 
-This comparison matches external participants within each missing-data setting,
-model, and MRI representation. Each input run should provide one feature scheme
-per such combination. Differences are reported as the left run minus the right
+This comparison selects explicit modality subsets, the requested task, calibrated
+predictions, and the parser implementation for RRL. It matches external
+participants within each missing-data setting and model. Differences are reported as the left run minus the right
 run, using common participants with matching labels.
 
 ## Rule and SHAP outputs
 
-D6 contains rule conditions, class weights, complexity, valid and active counts,
-coverage rates, outcome counts, odds ratios, and associated uncertainty. It
-preserves both the raw rule weights and the weights transformed by calibration
-and fusion. The saved `Weight Space` identifies the scale; fusion weights are
-reported before participant-specific normalization over available modalities.
-`Outcome Label` identifies the class used for each rule's effect statistics.
+Rule tables retain raw class weights, calibration/fusion-scaled weights,
+conditions, validity, activation counts, and their labelled population.
 
-SHAP bundles preserve participant IDs, transformed feature values, feature and
-output names, base values, contributions, explanation population, output scale,
-and same-scale `reference_output`. D6 exports global summaries, a compressed
-individual contribution table, reconstructed model outputs, and participant-level
-additivity checks. Feature units and transformations are supplied by the paper's
-feature dictionary. Rule statistics retain their recorded label version.
+Every explanation records `explanation_engine` and `reference_engine`. Parser
+rules are the primary deployed-RRL explanation; existing RRL SHAP explains the
+neural network. Its additivity reference must be that neural output. A missing
+historical final-neural reference is recorded as unavailable and excluded from
+validated cross-model summaries; the original contributions remain traceable.
+
+SHAP comparisons use the positive class and common explained participants with
+an available modality. Within each task, development cohort, modality, feature
+set and outer fold, mean absolute SHAP is divided by the sum over **all** features.
+The normalized shares are then averaged equally across folds. A feature absent
+from a fold contributes zero to that fold's summary. The reported standard
+deviation is the population standard deviation across folds, not a confidence
+interval. Top features are selected only after normalization and aggregation.
+
+`shap_global.csv` retains raw and relative importance per bundle.
+`shap_summary.csv` contains the fold summaries used for comparisons.
+`shap_bundles.csv` records sample counts, feature signatures and additivity checks.
+`shap_exclusions.csv` lists comparison groups with different feature sets or a
+failed original-scale additivity check. Original bundles and contributions remain
+available. Final-model training explanations are separate from held-out folds.
+
+XGBoost raw margins and random-forest/RRL probabilities remain in their original
+units for individual explanations and additivity checks. Relative shares describe
+importance allocation within each model; a nonlinear output transformation can
+still change feature rankings. `shap_values.csv.gz` is streamed one bundle at a
+time and preserves participant IDs, fold, transformed feature values, output
+space, base value and contributions.
 
 ## Outputs and repository contents
 

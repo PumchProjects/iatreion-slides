@@ -28,6 +28,9 @@ class CompareCommandTest(TestCase):
                         'subset': 'h-nonimaging_h-mri',
                         'setting': 'imputed',
                         'model': 'xgboost',
+                        'task': 'MMSE',
+                        'inference_engine': 'tree',
+                        'prediction_kind': 'calibrated_fusion',
                         'y_true': [0, 1, 0, 1],
                         'probability': [0.1, 0.8, 0.4, 0.6],
                         'y_pred': [0, 1, 0, 1],
@@ -48,6 +51,14 @@ class CompareCommandTest(TestCase):
                     'example',
                     '--right-run',
                     'example',
+                    '--left-subset',
+                    'h-nonimaging_h-mri',
+                    '--right-subset',
+                    'h-nonimaging_h-mri',
+                    '--task',
+                    'MMSE',
+                    '--label-column',
+                    'y_true_baseline' if updated_labels else 'y_true',
                     '--cohort',
                     'AIBL',
                     '--output',
@@ -58,9 +69,7 @@ class CompareCommandTest(TestCase):
                 with patch.object(sys, 'argv', args):
                     main()
                 result = pd.read_csv(output)
-                expected = (
-                    {'y_true', 'y_true_baseline'} if updated_labels else {'y_true'}
-                )
+                expected = {'y_true_baseline'} if updated_labels else {'y_true'}
                 self.assertEqual(set(result.label_column), expected)
                 self.assertTrue(result.n_common.eq(4).all())
                 self.assertEqual(len(result), 7 * len(expected))
